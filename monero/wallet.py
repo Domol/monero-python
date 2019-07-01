@@ -152,7 +152,7 @@ class Wallet(object):
 
         """
         return self._backend.import_key_images(key_images_hex)
-    
+
     def get_unspent_outputs(
         self,
         account_index: int = 0,
@@ -175,7 +175,7 @@ class Wallet(object):
             subaddr_indices=subaddr_indices,
             verbose=verbose
         )
-    
+
     def get_incoming_transactions(
         self,
         account_index: int = 0,
@@ -189,6 +189,9 @@ class Wallet(object):
             min_height=min_height,
             subaddr_indices=subaddr_indices
         )
+
+    def get_transfer(self, txid: str, account_index = 0):
+        return self._backend.get_transfer_by_txid(txid, account_index)
 
     # Following methods operate on default account (index=0)
     def balances(self):

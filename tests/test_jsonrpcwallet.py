@@ -10,7 +10,10 @@ import pytest
 from monero.wallet import Wallet
 from monero.address import BaseAddress, Address, SubAddress
 from monero.seed import Seed
-from monero.transaction import IncomingPayment, OutgoingPayment, Transaction
+from monero.transaction import (
+    Payment, IncomingPayment, OutgoingPayment, Transaction
+)
+from monero.numbers import from_atomic, PaymentID
 from monero.backends.jsonrpc import JSONRPCWallet
 
 from .base import JSONTestCase
@@ -1336,3 +1339,47 @@ def test_get_unspent_outputs(request_params, response):
         )
 
         assert len(outputs) == len(response.get('transfers', []))
+
+
+@pytest.mark.parametrize("response_type, obj_type", [
+    ("in", IncomingPayment),
+    ("out", OutgoingPayment),
+    ("pending", Payment),
+    ("failed", Payment),
+    ("pool", Payment)
+])
+def test_get_transfer(response_type, obj_type):
+    wallet = JSONRPCWallet()
+    response = {
+        "transfer": {
+            "address": "55LTR8KniP4LQGJSPtbYDacR7dz8RBFnsfAKMaMuwUNYX6aQbBcovzDPyrQF9KXF9tVU6Xk3K8no1BywnJX6GvZX8yJsXvt",
+            "amount": 300000000000,
+            "confirmations": 1,
+            "double_spend_seen": False,
+            "fee": 21650200000,
+            "height": 153624,
+            "note": "",
+            "payment_id": "0000000000000000",
+            "subaddr_index": {
+                "major": 0,
+                "minor": 0
+            },
+            "suggested_confirmations_threshold": 1,
+            "timestamp": 1535918400,
+            "txid": "c36258a276018c3a4bc1f195a7fb530f50cd63a4fa765fb7c6f7f49fc051762a",
+            "unlock_time": 0
+        }
+    }
+    response["transfer"]["type"] = response_type
+
+    raw_request_mock = MagicMock(return_value=response)
+    with patch.object(wallet, 'raw_request', raw_request_mock):
+        transfer = wallet.get_transfer_by_txid(
+            "c36258a276018c3a4bc1f195a7fb530f50cd63a4fa765fb7c6f7f49fc051762a"
+        )
+
+    assert isinstance(transfer, obj_type)
+    assert transfer.local_address == response["transfer"]["address"]
+    assert transfer.amount == from_atomic(response["transfer"]["amount"])
+    assert transfer.transaction.hash == wallet._tx(response["transfer"]).hash
+    assert transfer.payment_id == PaymentID(response["transfer"]["payment_id"])

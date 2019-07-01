@@ -11,7 +11,7 @@ from ..address import address, Address, SubAddress
 from ..numbers import from_atomic, to_atomic, PaymentID
 from ..seed import Seed
 from ..transaction import (
-    Transaction, IncomingPayment, OutgoingPayment, Output
+    Transaction, Payment, IncomingPayment, OutgoingPayment, Output
 )
 
 _log = logging.getLogger(__name__)
@@ -276,6 +276,26 @@ class JSONRPCWallet(object):
             transfers.extend(resp.get('pool', []))
 
         return list(map(self._inpayment, transfers))
+
+    def get_transfer_by_txid(
+            self, txid: str, account_index: int = 0
+        ) -> Payment:
+
+        params: Dict[str, Any] = {
+            'account_index': account_index,
+            'txid': txid
+        }
+        request_result = self.raw_request('get_transfer_by_txid', params)
+        transfer_data = request_result.get("transfer")
+        transfer_type = transfer_data.get("type")
+        payment_dict = self._paymentdict(transfer_data)
+        if transfer_type == "in":
+            return IncomingPayment(**payment_dict)
+        elif transfer_type == "out":
+            return OutgoingPayment(**payment_dict)
+        else:
+            return Payment(**payment_dict)
+
 
     # TODO: consider removing/deprecating
     def transfers_in(self, account, pmtfilter):
