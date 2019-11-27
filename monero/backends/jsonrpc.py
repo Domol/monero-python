@@ -64,6 +64,15 @@ class JSONRPCDaemon(object):
                 confirmations=0))
         return txs
 
+    def headers(self, start_height, end_height=None):
+        end_height = end_height or start_height
+        res = self.raw_jsonrpc_request('get_block_headers_range', {
+                'start_height': start_height,
+                'end_height': end_height})
+        if res['status'] == 'OK':
+            return res['headers']
+        raise Exception()
+
     def raw_request(self, path, data):
         hdr = {'Content-Type': 'application/json'}
         _log.debug(u"Request: {path}\nData: {data}".format(
@@ -81,7 +90,6 @@ class JSONRPCDaemon(object):
         _ppresult = json.dumps(result, indent=2, sort_keys=True)
         _log.debug(u"Result:\n{result}".format(result=_ppresult))
         return result
-
 
     def raw_jsonrpc_request(self, method, params=None):
         hdr = {'Content-Type': 'application/json'}
@@ -298,6 +306,8 @@ class JSONRPCWallet(object):
     def transfers_in(self, account, pmtfilter):
         params = {'account_index': account, 'pending': False}
         method = 'get_transfers'
+        if pmtfilter.tx_ids:
+            method = 'get_transfer_by_txid'
         if pmtfilter.unconfirmed:
             params['in'] = pmtfilter.confirmed
             params['out'] = False
@@ -311,7 +321,6 @@ class JSONRPCWallet(object):
                 params['out'] = False
                 params['pool'] = False
         if method == 'get_transfers':
-            arg = 'in'
             if pmtfilter.min_height:
                 # NOTE: the API uses (min, max] range which is confusing
                 params['min_height'] = pmtfilter.min_height - 1
@@ -319,29 +328,48 @@ class JSONRPCWallet(object):
             if pmtfilter.max_height:
                 params['max_height'] = pmtfilter.max_height
                 params['filter_by_height'] = True
-            # PR#3235 makes the following obsolete
-            # CRYPTONOTE_MAX_BLOCK_NUMBER = 500000000
-            params['max_height'] = params.get('max_height', 500000000)
+            _pmts = self.raw_request(method, params)
+            pmts = _pmts.get('in', [])
+        elif method == 'get_transfer_by_txid':
+            pmts = []
+            for txid in pmtfilter.tx_ids:
+                params['txid'] = txid
+                try:
+                    _pmts = self.raw_request(method, params, squelch_error_logging=True)
+                except exceptions.TransactionNotFound:
+                    continue
+                pmts.extend(_pmts['transfers'])
         else:
-            arg = 'payments'
             # NOTE: the API uses (min, max] range which is confusing
             params['min_block_height'] = (pmtfilter.min_height or 1) - 1
-        _pmts = self.raw_request(method, params)
-        pmts = _pmts.get(arg, [])
+            _pmts = self.raw_request(method, params)
+            pmts = _pmts.get('payments', [])
         if pmtfilter.unconfirmed:
             pmts.extend(_pmts.get('pool', []))
         return list(pmtfilter.filter(map(self._inpayment, pmts)))
 
     def transfers_out(self, account, pmtfilter):
-        _pmts = self.raw_request('get_transfers', {
-            'account_index': account,
-            'in': False,
-            'out': pmtfilter.confirmed,
-            'pool': False,
-            'pending': pmtfilter.unconfirmed})
-        pmts = _pmts.get('out', [])
-        if pmtfilter.unconfirmed:
-            pmts.extend(_pmts.get('pending', []))
+        if pmtfilter.tx_ids:
+            pmts = []
+            for txid in pmtfilter.tx_ids:
+                try:
+                    _pmts = self.raw_request(
+                        'get_transfer_by_txid',
+                        {'account_index': account, 'txid': txid},
+                        squelch_error_logging=True)
+                except exceptions.TransactionNotFound:
+                    continue
+                pmts.extend(_pmts['transfers'])
+        else:
+            _pmts = self.raw_request('get_transfers', {
+                'account_index': account,
+                'in': False,
+                'out': pmtfilter.confirmed,
+                'pool': False,
+                'pending': pmtfilter.unconfirmed})
+            pmts = _pmts.get('out', [])
+            if pmtfilter.unconfirmed:
+                pmts.extend(_pmts.get('pending', []))
         return list(pmtfilter.filter(map(self._outpayment, pmts)))
 
     def _paymentdict(self, data):
@@ -480,7 +508,8 @@ class JSONRPCWallet(object):
 
         if 'error' in result:
             err = result['error']
-            _log.error(u"JSON RPC error:\n{result}".format(result=_ppresult))
+            if not squelch_error_logging:
+                _log.error(u"JSON RPC error:\n{result}".format(result=_ppresult))
             if err['code'] in _err2exc:
                 raise _err2exc[err['code']](err['message'])
             else:
@@ -504,6 +533,7 @@ class MethodNotFound(RPCError):
 
 _err2exc = {
     -2: exceptions.WrongAddress,
+    -4: exceptions.GenericTransferError,
     -5: exceptions.WrongPaymentId,
     -8: exceptions.TransactionNotFound,
     -9: exceptions.SignatureCheckFailed,
